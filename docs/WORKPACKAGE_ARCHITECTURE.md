@@ -67,6 +67,16 @@ Path mapping converts depot-provided workpackage identity into stable Jenkins it
 
 Generated folder and job names should be deterministic, stable across re-indexes, and safe for Jenkins item names. Perforce depot paths should be retained in metadata so display names can remain readable while internal names stay stable.
 
+Organization-level mapping, filtering, grouping, and collision detection must live in organization/computed-folder classes under the proposed `org.jenkinsci.plugins.p4.organization` package. These responsibilities must not be implemented by changing existing `StreamsScmSource` discovery semantics unless the change explicitly preserves backwards compatibility for existing multibranch configurations. When a computed-folder implementation creates generated multibranch jobs, it should pass only the scoped include path for that generated job and an existing-compatible exclude regular expression into `StreamsScmSource`; any broader organization filtering decision must already have been made before that source is configured.
+
+The proposed organization package owns these design components:
+
+* `P4DepotPathMapping` for converting depot or stream paths into display paths and Jenkins-safe item names.
+* `P4PathPatternParser` for parsing organization include/exclude configuration and translating generated-job scopes into existing-compatible `StreamsScmSource` include/exclude values.
+* `P4StreamDiscoveryService` for adapting depot stream metadata into generated project keys before Jenkins item reconciliation.
+* `P4StreamProjectKey` for carrying the stable depot path, display path, and Jenkins item name identity.
+* A collision detector/grouping service, initially `P4StreamProjectCollisionDetector`, for finding generated item-name collisions before child reconciliation.
+
 ## 9. Indexing lifecycle
 
 The indexing lifecycle is the Jenkins `ComputedFolder` lifecycle owned by `P4DepotComputedFolder`:
