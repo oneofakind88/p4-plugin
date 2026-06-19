@@ -85,6 +85,32 @@ Event handling should schedule recomputation of the owning `P4DepotComputedFolde
 
 The MVP configuration belongs to `P4DepotComputedFolder` and should include credentials, depot or stream include paths, optional filters, script path defaults, and naming rules for generated folders and jobs.
 
+## 10a. Pipeline definition requirements
+
+### Design: central Jenkinsfile extension point
+
+Central Jenkinsfile mode must be modeled as a Jenkins Multibranch Pipeline project-factory concern, not as a new Perforce stream-discovery rule. The exact Jenkins extension point is the `jenkins.branch.BranchProjectFactory` configured on the owning `WorkflowMultiBranchProject`; for Pipeline jobs the concrete factory is `org.jenkinsci.plugins.workflow.multibranch.WorkflowBranchProjectFactory`. A central Jenkinsfile implementation should therefore be introduced as a `WorkflowBranchProjectFactory`-compatible factory, or a narrowly scoped extension of that factory, whose descriptor appears in the Multibranch Pipeline **Build Configuration** / **Project Factory** UI beside the existing "by Jenkinsfile" configuration.
+
+The design contract for that factory is:
+
+* Local mode keeps the existing `WorkflowBranchProjectFactory` behavior: the project factory contributes an `SCMSourceCriteria` that probes each candidate head for the configured script path, and only heads with a matching local Jenkinsfile are observed.
+* Central mode contributes criteria that accepts a candidate head when the central Jenkinsfile configuration is valid, even if the candidate stream does not contain the script path locally. The factory remains responsible for configuring generated `WorkflowJob` definitions so builds load the central Jenkinsfile while the Perforce branch source supplies the stream head and revision metadata for checkout and environment context.
+* The p4-plugin SCM source classes must not infer central mode from stream paths, include patterns, or the presence of a special depot file. They should receive the normal `SCMSourceCriteria` from the project factory and apply it consistently during indexing.
+
+Interactions with existing classes:
+
+* `AbstractP4ScmSource.getScriptPathOrDefault()` remains the compatibility bridge to the owning `WorkflowMultiBranchProject`. It should continue to read the configured `WorkflowBranchProjectFactory.getScriptPath()` when the owner uses the standard factory, falling back to `Jenkinsfile` outside that context. A central factory must expose the local probe path it wants p4-plugin event scanning to use, or explicitly document that event-side Jenkinsfile walking is disabled or mapped to the central script path.
+* `AbstractP4ScmSource.retrieve(...)` remains the indexing gate. It enumerates `P4SCMHead` instances, opens a temporary Perforce client for each head, creates a `P4SCMProbe`, and calls `criteria.isHead(...)` when criteria are present. Central mode must be expressed through that criteria object so the same `retrieve(...)` path accepts streams without local Jenkinsfiles only when central mode is enabled.
+* SCM criteria probing is the behavioral switch. In local mode the criteria should use the probe to test the candidate head for `getScriptPathOrDefault()`. In central mode the criteria should not require that local probe result, but it may still perform any central-script validation owned by the project factory. A null criteria continues to mean that every enumerated head matches.
+* `StreamsScmSource` continues to own stream head discovery only. Its `getHeads(...)` implementation expands folder properties, calls `p4.getStreams(...)` for the include paths, applies the exclude pattern to stream names, and creates one `P4SCMHead` per discovered stream. It must not filter out streams based on local Jenkinsfile presence; that decision belongs to the `SCMSourceCriteria` supplied during `retrieve(...)`.
+* Workflow multibranch project factory configuration is the user-visible control plane. Standard local Jenkinsfile behavior is configured by the existing `WorkflowBranchProjectFactory` script path. Central Jenkinsfile mode must be configured by selecting the central-aware project factory and setting the central script source/path there, while leaving Perforce `SCMSource` include/exclude, credentials, charset, populate, and workspace settings focused on discovering and building stream heads.
+
+Acceptance tests for central mode:
+
+1. **Stream has local Jenkinsfile**: configure a Multibranch Pipeline with the standard `WorkflowBranchProjectFactory` script path `Jenkinsfile`; create a stream containing `Jenkinsfile`; run indexing; assert that `StreamsScmSource` discovers the stream head and `AbstractP4ScmSource.retrieve(...)` observes it because the local `SCMSourceCriteria` probe succeeds.
+2. **Stream has no local Jenkinsfile but central mode is enabled**: configure the Multibranch Pipeline with the central-aware project factory and a valid central Jenkinsfile; create a stream without `Jenkinsfile`; run indexing; assert that stream head discovery still returns the stream and `retrieve(...)` observes it because the central-mode criteria accepts the head without a local Jenkinsfile.
+3. **Stream has no Jenkinsfile and central mode is disabled**: configure the standard project factory with script path `Jenkinsfile`; create a stream without that file; run indexing; assert that stream head discovery can enumerate the stream but `retrieve(...)` does not observe it because the local `SCMSourceCriteria` probe fails.
+
 ## 11. Required Jenkins plugin dependencies
 
 The MVP dependency set is the dependency set required by `P4DepotComputedFolder extends ComputedFolder`, nested folder item generation, and generated Pipeline jobs:
