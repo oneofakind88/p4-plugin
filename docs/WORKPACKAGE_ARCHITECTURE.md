@@ -35,11 +35,18 @@ The depot can provide stream-level information cheaply as part of stream enumera
 
 Nested Jenkins folders are mandatory for the MVP. The primary target is therefore a new parent item type, `P4DepotComputedFolder`, implemented as `P4DepotComputedFolder extends ComputedFolder`.
 
-`P4DepotComputedFolder` owns workpackage indexing at the depot/workpackage root and materializes the discovered hierarchy as Jenkins items under itself. The generated model is:
+`P4DepotComputedFolder` owns workpackage indexing at the depot/workpackage root and materializes the discovered hierarchy as Jenkins items under itself. The intended Jenkins API surface is explicit:
+
+* `com.cloudbees.hudson.plugins.folder.computed.ComputedFolder` is the parent lifecycle base class for `P4DepotComputedFolder`.
+* `com.cloudbees.hudson.plugins.folder.Folder` child items are generated for visible non-leaf workpackage levels. These are managed children beneath the computed parent, not user-authored source definitions.
+* `org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject` is the generated Pipeline project type for buildable workpackage leaves.
+* Orphaned item strategy types from `com.cloudbees.hudson.plugins.folder.computed`, such as `OrphanedItemStrategy`, `DefaultOrphanedItemStrategy`, and `ComputedFolder.OrphanedItemObserver`, govern generated child retention, deletion, and reconciliation reporting.
+
+The generated model is:
 
 * `P4DepotComputedFolder` as the top-level Jenkins parent item configured by the user.
-* Nested computed or managed folder items for each discovered Perforce workpackage folder level that must appear as a Jenkins folder.
-* Generated Pipeline child jobs at leaf workpackage nodes, reusing the existing p4-plugin SCM source concepts from `src/main/java/org/jenkinsci/plugins/p4/scm/` and the stream discovery behavior represented by `org.jenkinsci.plugins.p4.scm.StreamsScmSource`.
+* Generated `Folder` child items for each discovered Perforce workpackage folder level that must appear as a Jenkins folder.
+* Generated `WorkflowMultiBranchProject` child jobs at buildable leaf workpackage nodes, reusing the existing p4-plugin SCM source concepts from `src/main/java/org/jenkinsci/plugins/p4/scm/` and the stream discovery behavior represented by `org.jenkinsci.plugins.p4.scm.StreamsScmSource`.
 * Stream-level metadata queried directly from the depot during discovery and used immediately to place each stream-backed workpackage at the correct Jenkins folder depth.
 
 An `SCMNavigator` implementation is not the MVP target because navigators are best suited to discovering sibling multibranch projects under a flat organization folder model. It remains a possible future or alternate implementation if the product requirement changes to a flat repository/project listing rather than mandatory nested Jenkins folders.
@@ -123,14 +130,15 @@ Acceptance tests for central mode:
 
 ## 11. Required Jenkins plugin dependencies
 
-The MVP dependency set is the dependency set required by `P4DepotComputedFolder extends ComputedFolder`, nested folder item generation, and generated Pipeline jobs:
+The MVP dependency set is the exact compile dependency set required by `P4DepotComputedFolder extends ComputedFolder`, generated `Folder` child items, generated `WorkflowMultiBranchProject` leaves, and orphan handling:
 
-* `cloudbees-folder` for `ComputedFolder` and nested Jenkins folder support.
-* `workflow-multibranch` and existing Pipeline dependencies for generated Pipeline job behavior already used by the plugin.
-* `scm-api` for continued reuse of the p4-plugin SCM source abstractions in `src/main/java/org/jenkinsci/plugins/p4/scm/`.
-* Existing p4-plugin dependencies declared in `pom.xml`, including credentials and Pipeline SCM step dependencies.
+* `cloudbees-folder` is required directly for `com.cloudbees.hudson.plugins.folder.computed.ComputedFolder`, generated `com.cloudbees.hudson.plugins.folder.Folder` children, and `com.cloudbees.hudson.plugins.folder.computed` orphaned item strategy classes. Although folder classes are currently available transitively through existing dependencies such as `folder-properties` and/or workflow dependencies, p4-plugin already imports folder classes in main sources and the nested-folder implementation will import more of them, so `pom.xml` must declare `org.jenkins-ci.plugins:cloudbees-folder` explicitly.
+* `workflow-multibranch` is required directly for generated `org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject` leaves and their standard Pipeline multibranch project factory behavior.
+* `scm-api` is required directly for continued reuse of the p4-plugin SCM source abstractions in `src/main/java/org/jenkinsci/plugins/p4/scm/`.
+* `credentials` and `credentials-binding` remain required for folder-scoped credential lookup and existing p4-plugin credential behavior.
+* Existing Pipeline dependencies declared in `pom.xml`, including `workflow-step-api`, `workflow-scm-step`, and `workflow-api`, remain required for Pipeline SCM/build integration.
 
-If `cloudbees-folder` is currently only transitive through another dependency, the implementation work should add or verify an explicit dependency declaration in `pom.xml` before compiling the MVP. Do not add a new primary `SCMNavigator` dependency path for the MVP architecture; keep navigator-specific dependencies and descriptors limited to the future flat variant if that variant is implemented.
+The implementation must not rely on transitive availability of `cloudbees-folder` for any direct import of `ComputedFolder`, `Folder`, or orphaned item strategy classes. Do not add a new primary `SCMNavigator` dependency path for the MVP architecture; keep navigator-specific dependencies and descriptors limited to the future flat variant if that variant is implemented.
 
 ## 12. Security and credentials
 
@@ -170,13 +178,13 @@ The folder implementation should keep Perforce discovery logic separate from Jen
 
 ## 21. Implementation phases
 
-1. Add the `P4DepotComputedFolder` item type, descriptor, and minimal configuration persistence.
+1. Add the `P4DepotComputedFolder` item type, descriptor, and minimal configuration persistence using `ComputedFolder` from `cloudbees-folder`.
 2. Add Perforce discovery services that return normalized workpackage nodes with depot identity, stream metadata, and path mapping fields.
-3. Add child reconciliation for nested folders and generated Pipeline jobs.
-4. Wire generated jobs to existing p4-plugin SCM metadata and script-path behavior.
+3. Add child reconciliation that creates generated `Folder` children for intermediate hierarchy nodes, generated `WorkflowMultiBranchProject` leaves for buildable workpackages, and applies `cloudbees-folder` orphaned item strategy classes for removed or renamed generated children.
+4. Wire generated `WorkflowMultiBranchProject` jobs to existing p4-plugin SCM metadata and script-path behavior.
 5. Add event handling that schedules recomputation of the owning folder.
 6. Add tests for discovery, mapping, reconciliation, credentials, and orphan handling.
-7. Verify dependency declarations and user-facing documentation.
+7. Verify dependency declarations and user-facing documentation, including the explicit `cloudbees-folder` dependency required for direct folder API imports.
 
 ## 22. Non-goals
 
